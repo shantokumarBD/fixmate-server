@@ -1,6 +1,7 @@
 import { services } from "../config/db.js";
 import { ObjectId } from "mongodb";
 
+// GET /api/services - All users: List all approved services with filters
 export const getAllServices = async (req, res) => {
   try {
     // 1. read query parameters from URL
@@ -48,6 +49,8 @@ export const getAllServices = async (req, res) => {
   }
 };
 
+// GET /api/services/:id - Customer/Technician/Admin: Get service by ID
+
 export const getServiceById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -65,5 +68,54 @@ export const getServiceById = async (req, res) => {
     res.send(result);
   } catch (error) {
     res.status(500).send({ message: error.message });
+  }
+};
+
+// POST /api/services - Technician: Create a new repair service
+export const createService = async (req, res) => {
+  try {
+    const {
+      title,
+      category,
+      description,
+      image,
+      basePrice,
+      estimatedDuration,
+      serviceMode,
+      serviceArea,
+    } = req.body;
+
+    // Basic validation: check required fields
+    if (!title || !category || !basePrice) {
+      return res
+        .status(400)
+        .json({ message: "Title, category, and basePrice are required" });
+    }
+
+    // Prepare new service document with server-controlled defaults
+    const newService = {
+      title,
+      category,
+      description: description || "",
+      image: image || "",
+      basePrice: Number(basePrice),
+      estimatedDuration: estimatedDuration || "",
+      serviceMode: serviceMode || "Home Visit",
+      serviceArea: serviceArea || "",
+      technicianName: req.user.name,
+      technicianEmail: req.user.email,
+      approvalStatus: "pending", // must be approved by admin later
+      isAvailable: true,
+      createdAt: new Date(),
+    };
+
+    // Insert into database
+    const result = await services.insertOne(newService);
+
+    res.status(201).json({ success: true, insertedId: result.insertedId });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to create service", error: error.message });
   }
 };
