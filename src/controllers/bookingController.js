@@ -1,4 +1,5 @@
 import { bookings, services } from "../config/db.js";
+import { isValidTransition } from "../utils/statusPipeline.js";
 import { ObjectId } from "mongodb";
 
 // POST /api/bookings - Customer: Create a new service booking
@@ -134,5 +135,79 @@ export const cancelBooking = async (req, res) => {
     res
       .status(500)
       .json({ message: "Failed to cancel booking", error: error.message });
+  }
+};
+
+// GET /api/bookings/technician - Technician: Get all bookings assigned to logged-in technician
+export const getTechnicianBookings = async (req, res) => {
+  try {
+    const result = await bookings
+      .find({ technicianEmail: req.user.email })
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch technician bookings",
+      error: error.message,
+    });
+  }
+};
+
+// PATCH /api/bookings/:id/status - Technician: Update booking status via Challenge 3 pipeline
+export const updateBookingStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, finalAmount } = req.body;
+
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    // 1. Verify booking exists and belongs to this technician
+    const booking = await bookings.findOne({
+      _id: queryId,
+      technicianEmail: req.user.email,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        message: "Booking not found or you are not authorized to update this booking",
+      });
+    }
+
+    // 2. Challenge 3: Validate status transition using State Machine
+    if (!isValidTransition(booking.status, status)) {
+      return res.status(400).json({
+        message: `Invalid status transition from '${booking.status}' to '${status}'`,
+      });
+    }
+
+    const updateFields = {
+      status,
+      updatedAt: new Date(),
+    };
+
+    // 3. Challenge 3: Technician must provide finalAmount > 0 when completing
+    if (status === "completed") {
+      if (!finalAmount || Number(finalAmount) <= 0) {
+        return res.status(400).json({
+          message: "Technicians cannot mark a booking completed without entering a finalAmount > 0",
+        });
+      }
+      updateFields.finalAmount = Number(finalAmount);
+      updateFields.completedAt = new Date();
+    }
+
+    // 4. Update booking in database
+    await bookings.updateOne({ _id: queryId }, { $set: updateFields });
+
+    res.json({
+      success: true,
+      message: `Booking status updated to ${status}`,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to update booking status",
+      error: error.message,
+    });
   }
 };

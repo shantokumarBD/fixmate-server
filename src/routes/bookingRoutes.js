@@ -3,8 +3,14 @@ import {
   createBooking,
   getMyBookings,
   cancelBooking,
+  getTechnicianBookings,
+  updateBookingStatus,
 } from "../controllers/bookingController.js";
-import { verifyToken, verifyCustomer } from "../middlewares/auth.js";
+import {
+  verifyToken,
+  verifyCustomer,
+  verifyTechnician,
+} from "../middlewares/auth.js";
 
 const router = express.Router();
 
@@ -14,9 +20,15 @@ router.post("/", verifyToken, verifyCustomer, createBooking);
 // GET /api/bookings/my - Customer views own bookings
 router.get("/my", verifyToken, verifyCustomer, getMyBookings);
 
+// GET /api/bookings/technician - Technician views assigned bookings
+router.get("/technician", verifyToken, verifyTechnician, getTechnicianBookings);
+
+
+// PATCH /api/bookings/:id/status - Technician updates booking status
+router.patch("/:id/status", verifyToken, verifyTechnician, updateBookingStatus);
+
 
 // PATCH /api/bookings/:id/cancel - Customer cancels own booking
 router.patch("/:id/cancel", verifyToken, verifyCustomer, cancelBooking);
-
 
 export default router;
