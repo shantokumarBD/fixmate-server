@@ -2,6 +2,8 @@ import express from "express";
 import cors from "cors";
 
 import serviceRoutes from "./routes/serviceRoutes.js";
+import bookingRoutes from "./routes/bookingRoutes.js";
+
 
 const app = express();
 
@@ -29,5 +31,6 @@ app.get("/", (req, res) => {
 
 app.use("/api/services", serviceRoutes);
 
+app.use("/api/bookings", bookingRoutes);
 
 export default app;
