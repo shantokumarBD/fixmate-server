@@ -173,3 +173,31 @@ export const updateService = async (req, res) => {
     res.status(500).send({ message: error.message });
   }
 };
+
+// DELETE /api/services/:id - Technician: Delete own service
+export const deleteService = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    // Delete only if both _id and technicianEmail match (Ownership verification)
+    const result = await services.deleteOne({
+      _id: queryId,
+      technicianEmail: req.user.email,
+    });
+
+    // If deletedCount is 0, service does not exist OR technician is not the owner
+    if (result.deletedCount === 0) {
+      return res.status(404).json({
+        message: "Service not found or you are not authorized to delete this",
+      });
+    }
+
+    res.json({ success: true, message: "Service deleted successfully" });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to delete service", error: error.message });
+  }
+};
