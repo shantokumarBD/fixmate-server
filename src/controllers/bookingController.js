@@ -75,10 +75,64 @@ export const createBooking = async (req, res) => {
       message: "Booking requested successfully",
       bookingId: result.insertedId,
     });
-
   } catch (error) {
     res
       .status(500)
       .json({ message: "Failed to create booking", error: error.message });
+  }
+};
+
+// GET /api/bookings/my - Customer: Get all bookings created by logged-in customer
+export const getMyBookings = async (req, res) => {
+  try {
+    const result = await bookings
+      .find({ customerEmail: req.user.email })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json(result);
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to fetch bookings", error: error.message });
+  }
+};
+
+// PATCH /api/bookings/:id/cancel - Customer: Cancel own booking
+export const cancelBooking = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    // Find booking and verify customer ownership
+    const booking = await bookings.findOne({
+      _id: queryId,
+      customerEmail: req.user.email,
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        message: "Booking not found or you do not have permission to cancel it",
+      });
+    }
+
+    // Cancellation rule: only allowed if status is 'requested' or 'accepted'
+    if (booking.status !== "requested" && booking.status !== "accepted") {
+      return res.status(400).json({
+        message: `Cannot cancel a booking that is already ${booking.status}`,
+      });
+    }
+
+    // Update status to 'cancelled'
+    await bookings.updateOne(
+      { _id: queryId },
+      { $set: { status: "cancelled", updatedAt: new Date() } },
+    );
+
+    res.json({ success: true, message: "Booking cancelled successfully" });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to cancel booking", error: error.message });
   }
 };
