@@ -4,7 +4,7 @@ import { ObjectId } from "mongodb";
 export const getAllServices = async (req, res) => {
   try {
     // 1. read query parameters from URL
-    const { category, serviceMode, search } = req.query;
+    const { category, serviceMode, search, sort } = req.query;
 
     const query = {
       approvalStatus: "approved",
@@ -29,8 +29,19 @@ export const getAllServices = async (req, res) => {
       ];
     }
 
+    // 2. Sorting logic (Default: newest first)
+    let sortOption = { createdAt: -1 };
+
+    if (sort === "price_asc") {
+      sortOption = { basePrice: 1 }; // Lowest price first
+    } else if (sort === "price_desc") {
+      sortOption = { basePrice: -1 }; // Highest price first
+    } else if (sort === "newest") {
+      sortOption = { createdAt: -1 }; // Newest first
+    }
+
     //  pass query into find()
-    const result = await services.find(query).toArray();
+    const result = await services.find(query).sort(sortOption).toArray();
     res.send(result);
   } catch (error) {
     res.status(500).send({ message: error.message });
