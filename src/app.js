@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 
+import serviceRoutes from "./routes/serviceRoutes.js";
+
 const app = express();
 
 
@@ -16,9 +18,16 @@ app.use(
 // JSON Body Parser
 app.use(express.json());
 
+
+
+
 // Root Route
 app.get("/", (req, res) => {
   res.send("FixMate server is running smoothly!....");
 });
+
+
+app.use("/api/services", serviceRoutes);
+
 
 export default app;
