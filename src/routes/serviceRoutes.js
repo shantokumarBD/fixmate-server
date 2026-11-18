@@ -4,6 +4,7 @@ import {
   getServiceById,
   createService,
   getMyServices,
+  updateService,
 } from "../controllers/serviceController.js";
 
 import { verifyToken, verifyTechnician } from "../middlewares/auth.js";
@@ -37,6 +38,8 @@ router.post("/", verifyToken, verifyTechnician, createService);
 router.get("/:id", getServiceById);
 
 
+// PATCH /api/services/:id - Update own service (technician only)
+router.patch("/:id", verifyToken, verifyTechnician, updateService);
 
 
 export default router;

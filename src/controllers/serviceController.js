@@ -121,7 +121,6 @@ export const createService = async (req, res) => {
 };
 
 // GET /api/services/my - Technician: Get all services created by logged-in technician
-
 export const getMyServices = async (req, res) => {
   try {
     // Only fetch services owned by this logged-in technician
@@ -133,11 +132,44 @@ export const getMyServices = async (req, res) => {
 
     res.send(result);
   } catch (error) {
-    res
-      .status(500)
-      .send({
-        message: "Failed to fetch technician services",
-        error: error.message,
+    res.status(500).send({
+      message: "Failed to fetch technician services",
+      error: error.message,
+    });
+  }
+};
+
+// PATCH /api/services/:id - Technician: Update own service
+
+export const updateService = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    const updateData = {
+      ...req.body,
+      approvalStatus: "pending",
+      updatedAt: new Date(),
+    };
+
+    // Prevent modifying immutable fields or changing owner (Ekhane boshbe)
+    delete updateData._id;
+    delete updateData.technicianEmail;
+
+    const result = await services.updateOne(
+      { _id: queryId, technicianEmail: req.user.email },
+      { $set: updateData },
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        message: "Service not found or you are not authorized to edit this",
       });
+    }
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: error.message });
   }
 };
