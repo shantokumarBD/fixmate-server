@@ -119,3 +119,25 @@ export const createService = async (req, res) => {
       .json({ message: "Failed to create service", error: error.message });
   }
 };
+
+// GET /api/services/my - Technician: Get all services created by logged-in technician
+
+export const getMyServices = async (req, res) => {
+  try {
+    // Only fetch services owned by this logged-in technician
+
+    const result = await services
+      .find({ technicianEmail: req.user.email })
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res
+      .status(500)
+      .send({
+        message: "Failed to fetch technician services",
+        error: error.message,
+      });
+  }
+};
