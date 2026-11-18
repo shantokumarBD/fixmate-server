@@ -33,3 +33,27 @@ export const verifyToken = async (req, res, next) => {
       .json({ message: "Unauthorized: Verification failed" });
   }
 };
+
+// Middleware: Only allow users with role 'customer'
+export const verifyCustomer = (req, res, next) => {
+  if (req.user?.role !== "customer") {
+    return res.status(403).json({ message: "Forbidden: Customer access only" });
+  }
+  next();
+};
+
+// Middleware: Only allow users with role 'technician'
+export const verifyTechnician = (req, res, next) => {
+  if (req.user?.role !== "technician") {
+    return res.status(403).json({ message: "Forbidden: Technician access only" });
+  }
+  next();
+};
+
+// Middleware: Only allow users with role 'admin'
+export const verifyAdmin = (req, res, next) => {
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ message: "Forbidden: Admin access only" });
+  }
+  next();
+};
