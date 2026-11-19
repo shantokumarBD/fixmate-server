@@ -101,3 +101,49 @@ export const updateServiceApproval = async (req, res) => {
     res.status(500).json({ message: "Failed to update service approval", error: error.message });
   }
 };
+
+
+// GET /api/admin/bookings - Admin: Get all platform bookings
+export const getAllBookingsForAdmin = async (req, res) => {
+  try {
+    const allBookings = await bookings
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json(allBookings);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch bookings", error: error.message });
+  }
+};
+
+// GET /api/admin/stats - Admin: Platform analytics and dashboard statistics
+export const getAdminStats = async (req, res) => {
+  try {
+    const totalUsers = await users.countDocuments();
+    const totalServices = await services.countDocuments();
+    const pendingServices = await services.countDocuments({ approvalStatus: "pending" });
+    const totalBookings = await bookings.countDocuments();
+    const completedBookings = await bookings.countDocuments({ status: "completed" });
+
+    // Calculate total revenue from successful payments
+    const revenueAggregation = await payments
+      .aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }])
+      .toArray();
+
+    const totalRevenue = revenueAggregation[0]?.total || 0;
+
+    res.json({
+      totalUsers,
+      totalServices,
+      pendingServices,
+      totalBookings,
+      completedBookings,
+      totalRevenue,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch admin stats", error: error.message });
+  }
+};
+
+
