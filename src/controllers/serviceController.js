@@ -92,6 +92,16 @@ export const createService = async (req, res) => {
         .json({ message: "Title, category, and basePrice are required" });
     }
 
+    // Validate serviceMode (must strictly be 'Home Visit' or 'Shop Drop-off')
+    const validModes = ["Home Visit", "Shop Drop-off"];
+    const selectedMode = serviceMode || "Home Visit";
+
+    if (!validModes.includes(selectedMode)) {
+      return res.status(400).json({
+        message: "serviceMode must be either 'Home Visit' or 'Shop Drop-off'",
+      });
+    }
+
     // Prepare new service document with server-controlled defaults
     const newService = {
       title,
@@ -100,7 +110,7 @@ export const createService = async (req, res) => {
       image: image || "",
       basePrice: Number(basePrice),
       estimatedDuration: estimatedDuration || "",
-      serviceMode: serviceMode || "Home Visit",
+      serviceMode: selectedMode,
       serviceArea: serviceArea || "",
       technicianName: req.user.name,
       technicianEmail: req.user.email,
@@ -140,20 +150,29 @@ export const getMyServices = async (req, res) => {
 };
 
 // PATCH /api/services/:id - Technician: Update own service
-
 export const updateService = async (req, res) => {
   try {
     const { id } = req.params;
+
+    // Validate serviceMode if provided in update
+    if (req.body.serviceMode) {
+      const validModes = ["Home Visit", "Shop Drop-off"];
+      if (!validModes.includes(req.body.serviceMode)) {
+        return res.status(400).json({
+          message: "serviceMode must be either 'Home Visit' or 'Shop Drop-off'",
+        });
+      }
+    }
 
     const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
 
     const updateData = {
       ...req.body,
-      approvalStatus: "pending",
+      approvalStatus: "pending", // edits require re-approval
       updatedAt: new Date(),
     };
 
-    // Prevent modifying immutable fields or changing owner (Ekhane boshbe)
+    // Prevent modifying immutable fields or changing owner
     delete updateData._id;
     delete updateData.technicianEmail;
 

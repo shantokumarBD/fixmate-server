@@ -3,26 +3,39 @@ import { isValidTransition } from "../utils/statusPipeline.js";
 import { ObjectId } from "mongodb";
 
 // POST /api/bookings - Customer: Create a new service booking
-
 export const createBooking = async (req, res) => {
   try {
-    const { serviceId, bookingDate, timeSlot, customerAddress, customerPhone } =
-      req.body;
+    const {
+      serviceId,
+      preferredDate,
+      bookingDate, 
+      timeSlot,
+      address,
+      customerAddress, 
+      customerPhone,
+      problemDescription,
+      issueDescription, 
+    } = req.body;
+
+    const finalDate = preferredDate || bookingDate;
+    const finalAddress = address || customerAddress;
+    const finalProblem = problemDescription || issueDescription;
 
     // 1. Check required fields
     if (
       !serviceId ||
-      !bookingDate ||
-      !timeSlot ||
-      !customerAddress ||
-      !customerPhone
+      !finalDate ||
+      !finalAddress ||
+      !customerPhone ||
+      !finalProblem
     ) {
-      return res
-        .status(400)
-        .json({ message: "All required fields must be provided" });
+      return res.status(400).json({
+        message:
+          "Required fields missing: serviceId, preferredDate, address, customerPhone, problemDescription",
+      });
     }
 
-    // Fetch service from database
+    // 2. Fetch service from database
     const queryId = ObjectId.isValid(serviceId)
       ? new ObjectId(serviceId)
       : serviceId;
@@ -33,41 +46,41 @@ export const createBooking = async (req, res) => {
       return res.status(404).json({ message: "Service not found" });
     }
 
-    // Duplicate check: prevent booking same service on same date
-
+    // 3. Duplicate check: prevent duplicate active booking for the same service
     const existingBooking = await bookings.findOne({
       serviceId: service._id,
       customerEmail: req.user.email,
-      bookingDate: bookingDate,
-      status: { $in: ["requested", "accepted"] },
+      status: { $in: ["requested", "accepted", "in-progress"] },
     });
+
     if (existingBooking) {
       return res.status(400).json({
         message:
-          "You already have an active booking for this service on this date",
+          "You already have an active booking request for this service",
       });
     }
 
-    // Create booking document and save to database
-
+    // 4. Create booking document (Strict Whitelist - No mass-assignment)
     const newBooking = {
-      ...req.body,
       serviceId: service._id,
       serviceTitle: service.title,
       serviceImage: service.image || "",
       category: service.category,
-      technicianEmail: service.technicianEmail,
+      basePrice: service.basePrice,
+      finalAmount: service.basePrice, // default = basePrice
       technicianName: service.technicianName,
+      technicianEmail: service.technicianEmail,
       customerName: req.user.name,
       customerEmail: req.user.email,
+      customerPhone: customerPhone,
+      address: finalAddress,
+      preferredDate: finalDate,
+      timeSlot: timeSlot || "",
+      problemDescription: finalProblem,
       status: "requested",
       paymentStatus: "unpaid",
-      basePrice: service.basePrice,
-      finalAmount: service.basePrice,
       createdAt: new Date(),
     };
-
-    delete newBooking._id;
 
     const result = await bookings.insertOne(newBooking);
 

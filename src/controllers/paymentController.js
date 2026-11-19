@@ -2,9 +2,6 @@ import { bookings, payments } from "../config/db.js";
 import { stripe } from "../config/stripe.js";
 import { ObjectId } from "mongodb";
 
-
-
-
 // POST /api/payments/create-checkout-session - Customer: Create Stripe Checkout Session
 export const createCheckoutSession = async (req, res) => {
   try {
@@ -35,7 +32,8 @@ export const createCheckoutSession = async (req, res) => {
     // Challenge 4 Rule: Pay-After-Service (Must be completed)
     if (booking.status !== "completed") {
       return res.status(400).json({
-        message: "Payment is only enabled after the service has been marked as completed",
+        message:
+          "Payment is only enabled after the service has been marked as completed",
       });
     }
 
@@ -44,61 +42,63 @@ export const createCheckoutSession = async (req, res) => {
       return res.status(400).json({ message: "This booking is already paid" });
     }
 
-    
     // Final amount check
     if (!booking.finalAmount || Number(booking.finalAmount) <= 0) {
-      return res.status(400).json({ message: "Valid final amount is not set for this service" });
+      return res
+        .status(400)
+        .json({ message: "Valid final amount is not set for this service" });
     }
 
-    // Create Stripe Checkout Session (Amount strictly from DB: booking.finalAmount)
-     const session = await stripe.checkout.sessions.create({
+    const clientUrl = process.env.CLIENT_URL || "http://localhost:3000";
+
+    // Create Stripe Checkout Session in USD
+    const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
       line_items: [
         {
           price_data: {
-            currency: "bdt", // or "usd"
+            currency: "usd",
             product_data: {
               name: booking.serviceTitle,
-              description: `Repair service bill for ${booking.customerName}`,
+              description: `Repair service payment for ${booking.customerName}`,
             },
-            unit_amount: Math.round(Number(booking.finalAmount) * 100), // Stripe takes amount in smallest unit (cents/paisa)
+            unit_amount: Math.round(Number(booking.finalAmount) * 100), // convert to cents
           },
           quantity: 1,
         },
       ],
       mode: "payment",
       customer_email: req.user.email,
-      success_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/checkout/success?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking._id}`,
-      cancel_url: `${process.env.CLIENT_URL || "http://localhost:3000"}/dashboard/customer/bookings?payment=cancelled`,
+      success_url: `${clientUrl}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${clientUrl}/payment/cancel`,
       metadata: {
         bookingId: booking._id.toString(),
+        serviceTitle: booking.serviceTitle,
+        customerName: booking.customerName,
         customerEmail: req.user.email,
+        technicianName: booking.technicianName,
         technicianEmail: booking.technicianEmail,
       },
     });
-
 
     res.json({
       success: true,
       url: session.url,
       sessionId: session.id,
     });
-
-
-
-
-
   } catch (error) {
-    res.status(500).json({ message: "Failed to create checkout session", error: error.message });
+    res.status(500).json({
+      message: "Failed to create checkout session",
+      error: error.message,
+    });
   }
 };
 
-
-
-// POST /api/payments/verify - Customer/System: Verify Stripe payment & update booking
+// GET or POST /api/payments/verify - Verify Stripe payment & update booking
 export const verifyPayment = async (req, res) => {
   try {
-    const { sessionId } = req.body;
+    // Support session_id from URL query (GET) or body (POST)
+    const sessionId = req.query.session_id || req.body.sessionId;
 
     if (!sessionId) {
       return res.status(400).json({ message: "Session ID is required" });
@@ -107,16 +107,32 @@ export const verifyPayment = async (req, res) => {
     // 1. Retrieve session details directly from Stripe
     const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    if (session.payment_status !== "paid") {
-      return res.status(400).json({ message: "Payment has not been completed" });
+    const isPaid =
+      session.status === "complete" || session.payment_status === "paid";
+    if (!isPaid) {
+      return res
+        .status(400)
+        .json({ message: "Payment has not been completed on Stripe" });
     }
 
-    const bookingId = session.metadata.bookingId;
-    const queryBookingId = ObjectId.isValid(bookingId) ? new ObjectId(bookingId) : bookingId;
-    const transactionId = session.payment_intent || session.id;
+    // 2. Ownership Verification: Check if session belongs to logged-in user
+    const sessionCustomerEmail =
+      session.metadata?.customerEmail ||
+      session.customer_email ||
+      session.customer_details?.email;
 
-    // 2. Prevent duplicate entries (Idempotency check)
-    const existingPayment = await payments.findOne({ transactionId });
+    if (
+      sessionCustomerEmail &&
+      req.user?.email &&
+      sessionCustomerEmail.toLowerCase() !== req.user.email.toLowerCase()
+    ) {
+      return res.status(403).json({
+        message: "Forbidden: Stripe session does not belong to your account",
+      });
+    }
+
+    // 3. Idempotency Check: if payment already recorded, exit early
+    const existingPayment = await payments.findOne({ stripeSessionId: sessionId });
     if (existingPayment) {
       return res.json({
         success: true,
@@ -125,9 +141,18 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // 3. Update booking status to paid
+    const bookingId = session.metadata?.bookingId;
+    const queryBookingId = ObjectId.isValid(bookingId)
+      ? new ObjectId(bookingId)
+      : bookingId;
+    const transactionId = session.payment_intent || session.id;
+
+    // Fetch booking details to complete payment record
+    const booking = await bookings.findOne({ _id: queryBookingId });
+
+    // 4. Update booking status to paid (Atomic condition: only if unpaid)
     await bookings.updateOne(
-      { _id: queryBookingId },
+      { _id: queryBookingId, paymentStatus: { $ne: "paid" } },
       {
         $set: {
           paymentStatus: "paid",
@@ -137,18 +162,42 @@ export const verifyPayment = async (req, res) => {
       }
     );
 
-    // 4. Log transaction in payments collection (Challenge 4 Requirement)
+    // 5. PDF Specification Payment Record
     const paymentRecord = {
-      bookingId: queryBookingId,
-      customerEmail: session.customer_email || session.metadata.customerEmail,
-      technicianEmail: session.metadata.technicianEmail,
-      amount: (session.amount_total || 0) / 100, // convert back from paisa to regular currency
+      bookingId: queryBookingId ? queryBookingId.toString() : "",
+      serviceTitle:
+        booking?.serviceTitle ||
+        session.metadata?.serviceTitle ||
+        "Repair Service",
+      customerName:
+        booking?.customerName ||
+        session.metadata?.customerName ||
+        "Customer",
+      customerEmail: sessionCustomerEmail || req.user.email,
+      technicianName:
+        booking?.technicianName ||
+        session.metadata?.technicianName ||
+        "Technician",
+      technicianEmail:
+        booking?.technicianEmail ||
+        session.metadata?.technicianEmail ||
+        "",
+      amount: (session.amount_total || 0) / 100, // convert back from cents to USD
+      currency: session.currency || "usd",
       transactionId: transactionId,
-      paymentMethod: "stripe",
-      createdAt: new Date(),
+      stripeSessionId: sessionId,
+      paymentStatus: "paid",
+      paidAt: new Date(),
     };
 
-    await payments.insertOne(paymentRecord);
+    try {
+      await payments.insertOne(paymentRecord);
+    } catch (insertErr) {
+      // Gracefully handle duplicate key if concurrent verification occurs
+      if (insertErr.code !== 11000) {
+        throw insertErr;
+      }
+    }
 
     res.json({
       success: true,
@@ -156,6 +205,9 @@ export const verifyPayment = async (req, res) => {
       payment: paymentRecord,
     });
   } catch (error) {
-    res.status(500).json({ message: "Failed to verify payment", error: error.message });
+    res.status(500).json({
+      message: "Failed to verify payment",
+      error: error.message,
+    });
   }
 };
