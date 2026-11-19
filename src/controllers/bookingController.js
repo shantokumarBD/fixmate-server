@@ -8,13 +8,13 @@ export const createBooking = async (req, res) => {
     const {
       serviceId,
       preferredDate,
-      bookingDate, 
+      bookingDate,
       timeSlot,
       address,
-      customerAddress, 
+      customerAddress,
       customerPhone,
       problemDescription,
-      issueDescription, 
+      issueDescription,
     } = req.body;
 
     const finalDate = preferredDate || bookingDate;
@@ -32,6 +32,24 @@ export const createBooking = async (req, res) => {
       return res.status(400).json({
         message:
           "Required fields missing: serviceId, preferredDate, address, customerPhone, problemDescription",
+      });
+    }
+
+    // Problem description minimum 20 characters rule
+    if (finalProblem.trim().length < 20) {
+      return res.status(400).json({
+        message: "Problem description must be at least 20 characters long",
+      });
+    }
+
+    // Preferred date must be today or in the future
+    const inputDate = new Date(finalDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (isNaN(inputDate.getTime()) || inputDate < today) {
+      return res.status(400).json({
+        message: "Preferred date must be today or a future date",
       });
     }
 
@@ -55,8 +73,7 @@ export const createBooking = async (req, res) => {
 
     if (existingBooking) {
       return res.status(400).json({
-        message:
-          "You already have an active booking request for this service",
+        message: "You already have an active booking request for this service",
       });
     }
 
@@ -126,22 +143,29 @@ export const cancelBooking = async (req, res) => {
 
     if (!booking) {
       return res.status(404).json({
-        message: "Booking not found or you do not have permission to cancel it",
+        message:
+          "Booking not found or you do not have permission to cancel it",
       });
     }
 
-    // Cancellation rule: only allowed if status is 'requested' or 'accepted'
-    if (booking.status !== "requested" && booking.status !== "accepted") {
+    // Cancellation rule: ONLY allowed if status is 'requested' (PDF strict rule)
+    if (booking.status !== "requested") {
       return res.status(400).json({
-        message: `Cannot cancel a booking that is already ${booking.status}`,
+        message: `Cannot cancel a booking once it is ${booking.status}. Cancellation is only allowed for 'requested' bookings.`,
       });
     }
 
-    // Update status to 'cancelled'
-    await bookings.updateOne(
-      { _id: queryId },
+    // Atomic update: only updates if still 'requested'
+    const result = await bookings.updateOne(
+      { _id: queryId, customerEmail: req.user.email, status: "requested" },
       { $set: { status: "cancelled", updatedAt: new Date() } },
     );
+
+    if (result.matchedCount === 0) {
+      return res.status(400).json({
+        message: "Failed to cancel: booking status has already changed",
+      });
+    }
 
     res.json({ success: true, message: "Booking cancelled successfully" });
   } catch (error) {
@@ -183,7 +207,8 @@ export const updateBookingStatus = async (req, res) => {
 
     if (!booking) {
       return res.status(404).json({
-        message: "Booking not found or you are not authorized to update this booking",
+        message:
+          "Booking not found or you are not authorized to update this booking",
       });
     }
 
@@ -203,15 +228,30 @@ export const updateBookingStatus = async (req, res) => {
     if (status === "completed") {
       if (!finalAmount || Number(finalAmount) <= 0) {
         return res.status(400).json({
-          message: "Technicians cannot mark a booking completed without entering a finalAmount > 0",
+          message:
+            "Technicians cannot mark a booking completed without entering a finalAmount > 0",
         });
       }
       updateFields.finalAmount = Number(finalAmount);
       updateFields.completedAt = new Date();
     }
 
-    // 4. Update booking in database
-    await bookings.updateOne({ _id: queryId }, { $set: updateFields });
+    // 4. Atomic update: match exact current status to prevent race conditions
+    const result = await bookings.updateOne(
+      {
+        _id: queryId,
+        technicianEmail: req.user.email,
+        status: booking.status,
+      },
+      { $set: updateFields },
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(409).json({
+        message:
+          "Conflict: Booking was modified by another request. Please refresh and try again.",
+      });
+    }
 
     res.json({
       success: true,
@@ -224,7 +264,6 @@ export const updateBookingStatus = async (req, res) => {
     });
   }
 };
-
 // GET /api/bookings/:id - Customer/Technician/Admin: Get single booking details
 export const getBookingById = async (req, res) => {
   try {
