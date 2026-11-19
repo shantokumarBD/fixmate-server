@@ -5,6 +5,7 @@ import {
   cancelBooking,
   getTechnicianBookings,
   updateBookingStatus,
+  getBookingById,
 } from "../controllers/bookingController.js";
 import {
   verifyToken,
@@ -22,6 +23,9 @@ router.get("/my", verifyToken, verifyCustomer, getMyBookings);
 
 // GET /api/bookings/technician - Technician views assigned bookings
 router.get("/technician", verifyToken, verifyTechnician, getTechnicianBookings);
+
+// GET /api/bookings/:id - Get single booking details
+router.get("/:id", verifyToken, getBookingById);
 
 
 // PATCH /api/bookings/:id/status - Technician updates booking status

@@ -211,3 +211,35 @@ export const updateBookingStatus = async (req, res) => {
     });
   }
 };
+
+// GET /api/bookings/:id - Customer/Technician/Admin: Get single booking details
+export const getBookingById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    const booking = await bookings.findOne({ _id: queryId });
+
+    if (!booking) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    // Access control: only the customer, assigned technician, or admin can view
+    const isCustomer = booking.customerEmail === req.user.email;
+    const isTechnician = booking.technicianEmail === req.user.email;
+    const isAdmin = req.user.role === "admin";
+
+    if (!isCustomer && !isTechnician && !isAdmin) {
+      return res.status(403).json({
+        message: "You do not have permission to view this booking",
+      });
+    }
+
+    res.json(booking);
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch booking details",
+      error: error.message,
+    });
+  }
+};
