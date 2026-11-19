@@ -2,6 +2,78 @@ import { bookings, payments } from "../config/db.js";
 import { stripe } from "../config/stripe.js";
 import { ObjectId } from "mongodb";
 
+// Shared Reusable Helper: Records payment and updates booking idempotently
+export const recordSuccessfulPayment = async (session) => {
+  const sessionId = session.id;
+  const bookingId = session.metadata?.bookingId;
+  const queryBookingId = ObjectId.isValid(bookingId)
+    ? new ObjectId(bookingId)
+    : bookingId;
+  const transactionId = session.payment_intent || session.id;
+
+  // 1. Idempotency Check: if payment already recorded, return existing
+  const existingPayment = await payments.findOne({ stripeSessionId: sessionId });
+  if (existingPayment) {
+    return existingPayment;
+  }
+
+  // 2. Fetch booking details for full record audit
+  const booking = await bookings.findOne({ _id: queryBookingId });
+
+  // 3. Update booking status to paid (Atomic condition: only if unpaid)
+  await bookings.updateOne(
+    { _id: queryBookingId, paymentStatus: { $ne: "paid" } },
+    {
+      $set: {
+        paymentStatus: "paid",
+        transactionId: transactionId,
+        paidAt: new Date(),
+      },
+    }
+  );
+
+  // 4. PDF Specification Payment Record
+  const paymentRecord = {
+    bookingId: queryBookingId ? queryBookingId.toString() : "",
+    serviceTitle:
+      booking?.serviceTitle ||
+      session.metadata?.serviceTitle ||
+      "Repair Service",
+    customerName:
+      booking?.customerName ||
+      session.metadata?.customerName ||
+      "Customer",
+    customerEmail:
+      session.metadata?.customerEmail ||
+      session.customer_email ||
+      "",
+    technicianName:
+      booking?.technicianName ||
+      session.metadata?.technicianName ||
+      "Technician",
+    technicianEmail:
+      booking?.technicianEmail ||
+      session.metadata?.technicianEmail ||
+      "",
+    amount: (session.amount_total || 0) / 100, // convert back from cents to USD
+    currency: session.currency || "usd",
+    transactionId: transactionId,
+    stripeSessionId: sessionId,
+    paymentStatus: "paid",
+    paidAt: new Date(),
+  };
+
+  try {
+    await payments.insertOne(paymentRecord);
+  } catch (insertErr) {
+    if (insertErr.code !== 11000) {
+      throw insertErr;
+    }
+  }
+
+  return paymentRecord;
+};
+
 // POST /api/payments/create-checkout-session - Customer: Create Stripe Checkout Session
 export const createCheckoutSession = async (req, res) => {
   try {
@@ -131,73 +203,8 @@ export const verifyPayment = async (req, res) => {
       });
     }
 
-    // 3. Idempotency Check: if payment already recorded, exit early
-    const existingPayment = await payments.findOne({ stripeSessionId: sessionId });
-    if (existingPayment) {
-      return res.json({
-        success: true,
-        message: "Payment already verified",
-        payment: existingPayment,
-      });
-    }
-
-    const bookingId = session.metadata?.bookingId;
-    const queryBookingId = ObjectId.isValid(bookingId)
-      ? new ObjectId(bookingId)
-      : bookingId;
-    const transactionId = session.payment_intent || session.id;
-
-    // Fetch booking details to complete payment record
-    const booking = await bookings.findOne({ _id: queryBookingId });
-
-    // 4. Update booking status to paid (Atomic condition: only if unpaid)
-    await bookings.updateOne(
-      { _id: queryBookingId, paymentStatus: { $ne: "paid" } },
-      {
-        $set: {
-          paymentStatus: "paid",
-          transactionId: transactionId,
-          paidAt: new Date(),
-        },
-      }
-    );
-
-    // 5. PDF Specification Payment Record
-    const paymentRecord = {
-      bookingId: queryBookingId ? queryBookingId.toString() : "",
-      serviceTitle:
-        booking?.serviceTitle ||
-        session.metadata?.serviceTitle ||
-        "Repair Service",
-      customerName:
-        booking?.customerName ||
-        session.metadata?.customerName ||
-        "Customer",
-      customerEmail: sessionCustomerEmail || req.user.email,
-      technicianName:
-        booking?.technicianName ||
-        session.metadata?.technicianName ||
-        "Technician",
-      technicianEmail:
-        booking?.technicianEmail ||
-        session.metadata?.technicianEmail ||
-        "",
-      amount: (session.amount_total || 0) / 100, // convert back from cents to USD
-      currency: session.currency || "usd",
-      transactionId: transactionId,
-      stripeSessionId: sessionId,
-      paymentStatus: "paid",
-      paidAt: new Date(),
-    };
-
-    try {
-      await payments.insertOne(paymentRecord);
-    } catch (insertErr) {
-      // Gracefully handle duplicate key if concurrent verification occurs
-      if (insertErr.code !== 11000) {
-        throw insertErr;
-      }
-    }
+    // 3. Process payment record using shared idempotent helper
+    const paymentRecord = await recordSuccessfulPayment(session);
 
     res.json({
       success: true,
@@ -210,4 +217,53 @@ export const verifyPayment = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+// GET /api/payments/my - Customer: Get own payment history
+export const getMyPayments = async (req, res) => {
+  try {
+    const history = await payments
+      .find({ customerEmail: req.user.email })
+      .sort({ paidAt: -1 })
+      .toArray();
+
+    res.json(history);
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch payment history",
+      error: error.message,
+    });
+  }
+};
+
+// POST /api/payments/webhook - Stripe webhook listener
+export const handleStripeWebhook = async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!endpointSecret) {
+    console.error("STRIPE_WEBHOOK_SECRET is not configured in .env");
+    return res.status(500).json({ error: "Webhook secret not configured" });
+  }
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+  } catch (err) {
+    console.error("Webhook signature verification failed:", err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    try {
+      await recordSuccessfulPayment(session);
+      console.log(`Webhook successfully processed payment for session: ${session.id}`);
+    } catch (err) {
+      console.error("Error processing checkout.session.completed:", err);
+      return res.status(500).json({ error: "Failed to process payment in webhook" });
+    }
+  }
+
+  res.json({ received: true });
 };
