@@ -53,3 +53,51 @@ export const updateUserRole = async (req, res) => {
     res.status(500).json({ message: "Failed to update user role", error: error.message });
   }
 };
+
+
+// GET /api/admin/services - Admin: Get all services with approval status
+export const getAllServicesForAdmin = async (req, res) => {
+  try {
+    const allServices = await services
+      .find({})
+      .sort({ createdAt: -1 })
+      .toArray();
+    res.json(allServices);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch services", error: error.message });
+  }
+};
+
+// PATCH /api/admin/services/:id/approval - Admin: Approve or reject a service
+export const updateServiceApproval = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approvalStatus } = req.body;
+    // Allowed approval statuses
+    if (approvalStatus !== "approved" && approvalStatus !== "rejected") {
+      return res.status(400).json({
+        message: "Status must be either 'approved' or 'rejected'",
+      });
+    }
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+    const result = await services.updateOne(
+      { _id: queryId },
+      {
+        $set: {
+          approvalStatus,
+          isAvailable: approvalStatus === "approved", // auto enable if approved, disable if rejected
+          updatedAt: new Date(),
+        },
+      }
+    );
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+    res.json({
+      success: true,
+      message: `Service has been ${approvalStatus} successfully`,
+    });
+  } catch (error) {
+    res.status(500).json({ message: "Failed to update service approval", error: error.message });
+  }
+};
