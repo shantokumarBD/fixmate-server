@@ -6,6 +6,7 @@ import {
   updateServiceApproval,
   getAllBookingsForAdmin,
   getAdminStats,
+  getAllPaymentsForAdmin,
 } from "../controllers/adminController.js";
 import { verifyToken, verifyAdmin } from "../middlewares/auth.js";
 
@@ -25,5 +26,8 @@ router.patch("/services/:id/approval", updateServiceApproval);
 // Bookings & Analytics
 router.get("/bookings", getAllBookingsForAdmin);
 router.get("/stats", getAdminStats);
+
+// Payments Transaction Audit (Item 6)
+router.get("/payments", getAllPaymentsForAdmin);
 
 export default router;
