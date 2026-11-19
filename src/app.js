@@ -3,7 +3,7 @@ import cors from "cors";
 
 import serviceRoutes from "./routes/serviceRoutes.js";
 import bookingRoutes from "./routes/bookingRoutes.js";
-
+import paymentRoutes from "./routes/paymentRoutes.js";
 
 const app = express();
 
@@ -32,5 +32,7 @@ app.get("/", (req, res) => {
 app.use("/api/services", serviceRoutes);
 
 app.use("/api/bookings", bookingRoutes);
+
+app.use("/api/payments", paymentRoutes);
 
 export default app;
