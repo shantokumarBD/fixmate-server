@@ -1,32 +1,38 @@
-import { services } from "../config/db.js";
+import { services, users } from "../config/db.js";
 import { ObjectId } from "mongodb";
 
-// GET /api/services - All users: List all approved services with filters
+// Helper: escape special regex characters for safe search
+const escapeRegex = (text) => {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+};
+
+// GET /api/services - Public: List all approved services with filters & limit
 export const getAllServices = async (req, res) => {
   try {
-    // 1. read query parameters from URL
-    const { category, serviceMode, search, sort } = req.query;
+    // 1. Read query parameters from URL
+    const { category, serviceMode, search, sort, limit } = req.query;
 
     const query = {
       approvalStatus: "approved",
       isAvailable: true,
     };
 
-    // Filter by category (e.g. ?category=AC)
+    // Filter by category (e.g. ?category=Air Conditioner)
     if (category) {
-      query.category = category;
+      query.category = String(category);
     }
 
     // Filter by service mode (e.g. ?serviceMode=Home Visit)
     if (serviceMode) {
-      query.serviceMode = serviceMode;
+      query.serviceMode = String(serviceMode);
     }
 
-    // Search by title or category
-    if (search) {
+    // Safe Search by title or category (escaped regex prevents ReDoS / crashes)
+    if (search && String(search).trim() !== "") {
+      const safeSearch = escapeRegex(search.trim());
       query.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { category: { $regex: search, $options: "i" } },
+        { title: { $regex: safeSearch, $options: "i" } },
+        { category: { $regex: safeSearch, $options: "i" } },
       ];
     }
 
@@ -41,33 +47,72 @@ export const getAllServices = async (req, res) => {
       sortOption = { createdAt: -1 }; // Newest first
     }
 
-    //  pass query into find()
-    const result = await services.find(query).sort(sortOption).toArray();
-    res.send(result);
+    // 3. Find with query and sort
+    let cursor = services.find(query).sort(sortOption);
+
+    // Apply limit if provided (e.g. ?limit=6 for home page featured services)
+    if (limit && !isNaN(Number(limit)) && Number(limit) > 0) {
+      cursor = cursor.limit(Number(limit));
+    }
+
+    const result = await cursor.toArray();
+    res.json(result);
   } catch (error) {
-    res.status(500).send({ message: error.message });
+    res.status(500).json({ message: error.message });
   }
 };
 
-// GET /api/services/:id - Customer/Technician/Admin: Get service by ID
-
+// GET /api/services/:id - Public: Get single service details with technician summary
 export const getServiceById = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const query = ObjectId.isValid(id)
-      ? { _id: new ObjectId(id) }
-      : { _id: id };
+    const queryId = ObjectId.isValid(id)
+      ? new ObjectId(id)
+      : id;
 
-    const result = await services.findOne(query);
+    // Service must be approved and available for public viewing (Item 12)
+    const service = await services.findOne({
+      _id: queryId,
+      approvalStatus: "approved",
+      isAvailable: true,
+    });
 
-    if (!result) {
-      return res.status(404).send({ message: "Service not found" });
+    if (!service) {
+      return res.status(404).json({
+        message: "Service not found or currently unavailable",
+      });
     }
 
-    res.send(result);
+    // Lookup technician profile from 'users' collection (Item 12)
+    const technician = await users.findOne(
+      { email: service.technicianEmail },
+      {
+        projection: {
+          name: 1,
+          image: 1,
+          area: 1,
+          bio: 1,
+          phone: 1,
+        },
+      }
+    );
+
+    // Attach technician summary
+    const responseData = {
+      ...service,
+      technician: {
+        name: technician?.name || service.technicianName,
+        image: technician?.image || "",
+        area: technician?.area || service.serviceArea || "",
+        bio: technician?.bio || "",
+        phone: technician?.phone || "",
+      },
+    };
+
+    res.json(responseData);
   } catch (error) {
-    res.status(500).send({ message: error.message });
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -220,3 +265,41 @@ export const deleteService = async (req, res) => {
       .json({ message: "Failed to delete service", error: error.message });
   }
 };
+
+// PATCH /api/services/:id/availability - Technician: Toggle availability without resetting approval
+export const toggleAvailability = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isAvailable } = req.body;
+
+    if (typeof isAvailable !== "boolean") {
+      return res.status(400).json({
+        message: "isAvailable must be a boolean (true or false)",
+      });
+    }
+
+    const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
+
+    // Updates ONLY isAvailable — approvalStatus is NEVER reset to pending
+    const result = await services.updateOne(
+      { _id: queryId, technicianEmail: req.user.email },
+      { $set: { isAvailable, updatedAt: new Date() } },
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({
+        message:
+          "Service not found or you are not authorized to update this service",
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Service availability set to ${isAvailable ? "available" : "unavailable"}`,
+      isAvailable,
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
