@@ -10,10 +10,17 @@ import { handleStripeWebhook } from "./controllers/paymentController.js";
 
 const app = express();
 
-// Middlewares - CORS
+// CORS Configuration
+const allowedOrigins = [
+  "http://localhost:3000",
+  ...(process.env.CLIENT_URL
+    ? process.env.CLIENT_URL.split(",").map((url) => url.trim())
+    : []),
+];
+
 app.use(
   cors({
-    origin: ["http://localhost:3000"],
+    origin: allowedOrigins,
     credentials: true,
   })
 );
@@ -39,5 +46,19 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/payments", paymentRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/users", userRoutes);
+
+// Centralized Error Handling Middleware
+app.use((err, req, res, next) => {
+  const statusCode = err.status || err.statusCode || 500;
+  const isProduction = process.env.NODE_ENV === "production";
+
+  console.error(`[FixMate Fault] ${err.message}`, !isProduction ? err.stack : "");
+
+  res.status(statusCode).json({
+    success: false,
+    message: err.message || "Internal Technical Workshop Error",
+    ...(isProduction ? {} : { stack: err.stack }),
+  });
+});
 
 export default app;
