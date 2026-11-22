@@ -1,5 +1,21 @@
+# dependencies
 node_modules/
+
+# environment variables (ignore all except .env.example)
 .env
-.DS_Store
+.env*
+!.env.example
+
+# logs & debug
 npm-debug.log*
-seed.js
+yarn-debug.log*
+yarn-error.log*
+logs/
+*.log
+
+# OS & system files
+.DS_Store
+Thumbs.db
+
+# coverage & testing
+coverage/
