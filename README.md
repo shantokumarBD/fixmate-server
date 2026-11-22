@@ -23,8 +23,8 @@
 
 | Target | URL / Value |
 | :--- | :--- |
-| **Live Server API Base URL** | `https://fixmate-server.example.com` *(Placeholder for deployment)* |
-| **Live Client (Frontend) URL** | `https://fixmate-client.example.com` *(Placeholder for deployment)* |
+| **Live Server API Base URL** | [https://fixmate-server-dk6f.onrender.com](https://fixmate-server-dk6f.onrender.com) |
+| **Live Client (Frontend) URL** | [https://fixmatebd.vercel.app](https://fixmatebd.vercel.app) |
 | **Local API Base URL** | `http://localhost:5000` |
 
 ### Default Admin & Evaluation Credentials (Test Accounts)
