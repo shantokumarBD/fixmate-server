@@ -85,7 +85,6 @@ export const updateServiceApproval = async (req, res) => {
       {
         $set: {
           approvalStatus,
-          isAvailable: approvalStatus === "approved", // auto enable if approved, disable if rejected
           updatedAt: new Date(),
         },
       }
@@ -118,7 +117,7 @@ export const getAllBookingsForAdmin = async (req, res) => {
 };
 
 
-// GET /api/admin/payments - Admin: Get all transaction history
+// GET /api/admin/payments - Admin: Get all transaction history with total revenue
 export const getAllPaymentsForAdmin = async (req, res) => {
   try {
     const allPayments = await payments
@@ -126,7 +125,15 @@ export const getAllPaymentsForAdmin = async (req, res) => {
       .sort({ paidAt: -1 })
       .toArray();
 
-    res.json(allPayments);
+    const totalRevenue = allPayments.reduce(
+      (sum, p) => sum + (Number(p.amount) || 0),
+      0
+    );
+
+    res.json({
+      payments: allPayments,
+      totalRevenue,
+    });
   } catch (error) {
     res
       .status(500)
@@ -137,45 +144,34 @@ export const getAllPaymentsForAdmin = async (req, res) => {
 // GET /api/admin/stats - Admin: Platform analytics and dashboard statistics
 export const getAdminStats = async (req, res) => {
   try {
-    const totalUsers = await users.countDocuments();
-    const totalCustomers = await users.countDocuments({ role: "customer" });
-    const totalTechnicians = await users.countDocuments({ role: "technician" });
-    const totalServices = await services.countDocuments();
-    const pendingServices = await services.countDocuments({
-      approvalStatus: "pending",
-    });
-    const totalBookings = await bookings.countDocuments();
-    const completedBookings = await bookings.countDocuments({
-      status: "completed",
-    });
-
-    // Calculate total revenue from successful payments
-    const revenueAggregation = await payments
-      .aggregate([{ $group: { _id: null, total: { $sum: "$amount" } } }])
-      .toArray();
-
-    const totalRevenue = revenueAggregation[0]?.total || 0;
-
-    // Bookings count by status for chart/visual breakdown (Item 10)
-    const bookingsByStatusAgg = await bookings
-      .aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
-      .toArray();
-
-    const bookingsByStatus = bookingsByStatusAgg.reduce((acc, curr) => {
-      acc[curr._id] = curr.count;
-      return acc;
-    }, {});
-
-    res.json({
+    const [
       totalUsers,
-      totalCustomers,
       totalTechnicians,
       totalServices,
       pendingServices,
       totalBookings,
-      completedBookings,
+      allPayments,
+    ] = await Promise.all([
+      users.countDocuments(),
+      users.countDocuments({ role: "technician" }),
+      services.countDocuments(),
+      services.countDocuments({ approvalStatus: "pending" }),
+      bookings.countDocuments(),
+      payments.find({}).toArray(),
+    ]);
+
+    const totalRevenue = allPayments.reduce(
+      (sum, p) => sum + (Number(p.amount) || 0),
+      0
+    );
+
+    res.json({
+      totalUsers,
+      totalTechnicians,
+      totalServices,
+      pendingServices,
+      totalBookings,
       totalRevenue,
-      bookingsByStatus,
     });
   } catch (error) {
     res
