@@ -10,19 +10,37 @@ export const verifyToken = async (req, res, next) => {
     return res.status(401).json({ message: "Unauthorized: Token missing" });
   }
 
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    return res.status(500).json({ message: "Server error: JWT_SECRET is not configured" });
+  }
+
   try {
-    // Find session in BetterAuth session collection
-    const secret = process.env.JWT_SECRET || process.env.BETTER_AUTH_SECRET;
+    // Pin algorithm strictly to HS256 to prevent token forgery
+    const decoded = jwt.verify(token, secret, { algorithms: ["HS256"] });
 
-    const decoded = jwt.verify(token, secret);
+    // Enforce expiry: reject tokens without an expiration claim
+    if (!decoded.exp) {
+      return res
+        .status(401)
+        .json({ message: "Unauthorized: Token must have an expiration claim" });
+    }
 
-    // Fetch current user from database by email (so admin role changes apply immediately)
+    // Enforce email claim
+    if (!decoded.email) {
+      return res
+        .status(401)
+        .json({ message: "Unauthorized: Token must have an email claim" });
+    }
+
+    // Fetch current user from database by email
     const user = await users.findOne({ email: decoded.email });
 
     if (!user) {
-      return res.status(401).json({ message: "Unauthorized: User not found" });
+      return res
+        .status(401)
+        .json({ message: "Invalid email or password. Please sign up first." });
     }
-
 
     // Attach user object to request and continue
     req.user = user;
