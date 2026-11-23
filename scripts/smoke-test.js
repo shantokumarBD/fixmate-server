@@ -49,13 +49,15 @@ async function runSmokeTests() {
   let ownerTechToken = techToken;
   let nonOwnerTechToken = otherTechToken;
 
-  await test("Public Services List (GET /api/services returns approved services)", async () => {
+  await test("Public Services List (GET /api/services returns approved services with pagination)", async () => {
     const res = await fetch(`${BASE_URL}/api/services`);
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const data = await res.json();
-    if (!Array.isArray(data)) throw new Error("Expected array response");
-    if (data.length > 0) {
-      sampleService = data.find((s) => s.technicianEmail === "rahim.tech@fixmate.com") || data[0];
+    const servicesList = Array.isArray(data) ? data : data.services;
+    if (!Array.isArray(servicesList)) throw new Error("Expected array of services");
+    if (!Array.isArray(data) && !data.pagination) throw new Error("Expected pagination metadata");
+    if (servicesList.length > 0) {
+      sampleService = servicesList.find((s) => s.technicianEmail === "rahim.tech@fixmate.com") || servicesList[0];
       if (sampleService.technicianEmail === "rahim.tech@fixmate.com") {
         ownerTechToken = techToken;
         nonOwnerTechToken = otherTechToken;
@@ -66,12 +68,54 @@ async function runSmokeTests() {
     }
   });
 
-  // 3. Limit Parameter
-  await test("Services Limit Param (GET /api/services?limit=2 returns <= 2 items)", async () => {
+  // 3. Limit Parameter & Pagination
+  await test("Services Limit & Pagination (GET /api/services?limit=2 returns <= 2 items and pagination metadata)", async () => {
     const res = await fetch(`${BASE_URL}/api/services?limit=2`);
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const data = await res.json();
-    if (data.length > 2) throw new Error(`Expected <= 2 items, got ${data.length}`);
+    const servicesList = Array.isArray(data) ? data : data.services;
+    if (servicesList.length > 2) throw new Error(`Expected <= 2 items, got ${servicesList.length}`);
+    if (data.pagination && data.pagination.limit !== 2) {
+      throw new Error(`Expected pagination.limit = 2, got ${data.pagination.limit}`);
+    }
+  });
+
+  // 3b. Feature 1: Server-Side Pagination Validation
+  await test("Feature 1: Server-Side Pagination (page, limit, totalPages, hasNextPage, hasPrevPage)", async () => {
+    const res = await fetch(`${BASE_URL}/api/services?page=1&limit=2`);
+    if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+    const data = await res.json();
+    if (!data.pagination) throw new Error("Missing pagination object in response");
+    if (data.pagination.page !== 1) throw new Error(`Expected page 1, got ${data.pagination.page}`);
+    if (data.pagination.limit !== 2) throw new Error(`Expected limit 2, got ${data.pagination.limit}`);
+    if (typeof data.pagination.total !== "number") throw new Error("Expected numeric total count");
+    if (typeof data.pagination.totalPages !== "number") throw new Error("Expected numeric totalPages");
+    if (typeof data.pagination.hasNextPage !== "boolean") throw new Error("Expected boolean hasNextPage");
+    if (typeof data.pagination.hasPrevPage !== "boolean") throw new Error("Expected boolean hasPrevPage");
+  });
+
+  // 3c. Feature 1: Sorting Whitelist Validation
+  await test("Feature 1: Sorting Whitelist (priceLowToHigh, priceHighToLow, newest)", async () => {
+    const resAsc = await fetch(`${BASE_URL}/api/services?sort=priceLowToHigh&limit=10`);
+    if (resAsc.status !== 200) throw new Error(`Expected 200, got ${resAsc.status}`);
+    const dataAsc = await resAsc.json();
+    const listAsc = dataAsc.services || dataAsc;
+    for (let i = 1; i < listAsc.length; i++) {
+      if (listAsc[i].basePrice < listAsc[i - 1].basePrice) {
+        throw new Error(`Sorting error: item ${i} price ${listAsc[i].basePrice} is less than ${listAsc[i-1].basePrice}`);
+      }
+    }
+  });
+
+  // 3d. Feature 1: Out-of-Range Page Safety
+  await test("Feature 1: Out-of-range page numbers handle gracefully without throwing 500", async () => {
+    const res = await fetch(`${BASE_URL}/api/services?page=9999&limit=6`);
+    if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
+    const data = await res.json();
+    if (!Array.isArray(data.services) || data.services.length !== 0) {
+      throw new Error("Expected empty services array for out-of-range page");
+    }
+    if (data.pagination.page !== 9999) throw new Error(`Expected page 9999, got ${data.pagination.page}`);
   });
 
   // 4. Safe Regex Search
@@ -85,8 +129,9 @@ async function runSmokeTests() {
     const res = await fetch(`${BASE_URL}/api/services?serviceMode=Home%20Visit`);
     if (res.status !== 200) throw new Error(`Expected 200, got ${res.status}`);
     const data = await res.json();
-    if (!Array.isArray(data)) throw new Error("Expected array response");
-    for (const item of data) {
+    const servicesList = Array.isArray(data) ? data : data.services;
+    if (!Array.isArray(servicesList)) throw new Error("Expected array response");
+    for (const item of servicesList) {
       if (item.serviceMode !== "Home Visit") {
         throw new Error(`Expected serviceMode 'Home Visit', got '${item.serviceMode}'`);
       }

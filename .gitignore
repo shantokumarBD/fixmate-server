@@ -19,3 +19,8 @@ Thumbs.db
 
 # coverage & testing
 coverage/
+
+# automated test scripts & temp diagnosis
+scripts/test-*.js
+scripts/find-*.js
+test-*.js
