@@ -5,10 +5,10 @@ import { ObjectId } from "mongodb";
 const escapeRegex = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const toObjectId = (id) => (ObjectId.isValid(id) ? new ObjectId(id) : id);
 
-// GET /api/services - Public: List all approved services with filters & limit
+// GET /api/services - Public: List all approved services with server-side pagination, search, category, mode & sort
 export const getAllServices = async (req, res) => {
   try {
-    const { category, serviceMode, search, sort, limit } = req.query;
+    const { category, serviceMode, search, sort, page: pageQuery, limit: limitQuery, all } = req.query;
 
     const query = {
       approvalStatus: "approved",
@@ -26,23 +26,68 @@ export const getAllServices = async (req, res) => {
       ];
     }
 
+    // Supported sorting options whitelist
     const sortMap = {
+      priceLowToHigh: { basePrice: 1 },
       price_asc: { basePrice: 1 },
       asc: { basePrice: 1 },
+      priceHighToLow: { basePrice: -1 },
       price_desc: { basePrice: -1 },
       desc: { basePrice: -1 },
       newest: { createdAt: -1 },
+      rating: { averageRating: -1 },
     };
     const sortOption = sortMap[sort] || { createdAt: -1 };
 
-    let cursor = services.find(query).sort(sortOption);
+    // Total documents matching the exact filter criteria
+    const total = await services.countDocuments(query);
 
-    if (limit && !isNaN(Number(limit)) && Number(limit) > 0) {
-      cursor = cursor.limit(Number(limit));
+    // Optional unpaginated query (e.g. for internal aggregations/category counting)
+    if (all === "true") {
+      const items = await services.find(query).sort(sortOption).limit(1000).toArray();
+      return res.json({
+        services: items,
+        pagination: {
+          total,
+          page: 1,
+          limit: total || 1,
+          totalPages: total > 0 ? 1 : 0,
+          hasNextPage: false,
+          hasPrevPage: false,
+        },
+      });
     }
 
-    const result = await cursor.toArray();
-    res.json(result);
+    // Server-side pagination parameters
+    let page = parseInt(pageQuery, 10);
+    if (isNaN(page) || page < 1) page = 1;
+
+    let limit = parseInt(limitQuery, 10);
+    if (isNaN(limit) || limit < 1) limit = 6;
+    // Cap limit to a maximum of 50 to prevent excessive payload queries
+    limit = Math.min(limit, 50);
+
+    const totalPages = Math.ceil(total / limit);
+    const skip = (page - 1) * limit;
+
+    const items = await services
+      .find(query)
+      .sort(sortOption)
+      .skip(skip)
+      .limit(limit)
+      .toArray();
+
+    return res.json({
+      services: items,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+      },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
