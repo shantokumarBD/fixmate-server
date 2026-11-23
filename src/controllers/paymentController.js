@@ -19,13 +19,21 @@ export const recordSuccessfulPayment = async (session) => {
   const booking = await bookings.findOne({ _id: queryBookingId });
 
   // 3. Update booking status to paid (Atomic condition: only where paymentStatus is strictly 'unpaid')
+  const paidTime = new Date();
   await bookings.updateOne(
     { _id: queryBookingId, paymentStatus: "unpaid" },
     {
       $set: {
         paymentStatus: "paid",
         transactionId,
-        paidAt: new Date(),
+        paidAt: paidTime,
+      },
+      $push: {
+        statusHistory: {
+          status: "completed",
+          changedAt: paidTime,
+          note: `Payment of $${(session.amount_total || 0) / 100} settled via Stripe (Txn: ${transactionId})`,
+        },
       },
     }
   );

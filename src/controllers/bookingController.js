@@ -61,6 +61,7 @@ export const createBooking = async (req, res) => {
     }
 
     // 4. Create booking document with copied snapshot fields (PDF Page 4 & 5)
+    const creationTime = new Date();
     const newBooking = {
       serviceId: service._id,
       serviceTitle: service.title,
@@ -79,7 +80,14 @@ export const createBooking = async (req, res) => {
       problemDescription: problemDescription.trim(),
       status: "requested",
       paymentStatus: "unpaid",
-      createdAt: new Date(),
+      createdAt: creationTime,
+      statusHistory: [
+        {
+          status: "requested",
+          changedAt: creationTime,
+          note: "Booking request submitted by customer",
+        },
+      ],
     };
 
     const result = await bookings.insertOne(newBooking);
@@ -89,11 +97,26 @@ export const createBooking = async (req, res) => {
   }
 };
 
+// Helper: Ensures statusHistory exists for legacy bookings
+const ensureStatusHistory = (booking) => {
+  if (!booking) return booking;
+  if (!booking.statusHistory || !Array.isArray(booking.statusHistory) || booking.statusHistory.length === 0) {
+    booking.statusHistory = [
+      {
+        status: booking.status || "requested",
+        changedAt: booking.createdAt || new Date(),
+        note: `Initial request (${booking.status || "requested"})`,
+      },
+    ];
+  }
+  return booking;
+};
+
 // GET /api/bookings/my - Customer: Get all bookings created by logged-in customer
 export const getMyBookings = async (req, res) => {
   try {
     const result = await bookings.find({ customerEmail: req.user.email }).sort({ createdAt: -1 }).toArray();
-    res.json(result);
+    res.json(result.map(ensureStatusHistory));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -115,9 +138,24 @@ export const cancelBooking = async (req, res) => {
       });
     }
 
+    const cancelNote =
+      req.body?.cancellationReason?.trim() ||
+      req.body?.note?.trim() ||
+      "Booking cancelled by customer";
+
+    const changeTime = new Date();
     await bookings.updateOne(
       { _id: queryId, status: "requested" },
-      { $set: { status: "cancelled", updatedAt: new Date() } }
+      {
+        $set: { status: "cancelled", updatedAt: changeTime },
+        $push: {
+          statusHistory: {
+            status: "cancelled",
+            changedAt: changeTime,
+            note: cancelNote,
+          },
+        },
+      }
     );
 
     res.json({ success: true, message: "Booking cancelled successfully" });
@@ -130,7 +168,7 @@ export const cancelBooking = async (req, res) => {
 export const getTechnicianBookings = async (req, res) => {
   try {
     const result = await bookings.find({ technicianEmail: req.user.email }).sort({ createdAt: -1 }).toArray();
-    res.json(result);
+    res.json(result.map(ensureStatusHistory));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -140,7 +178,7 @@ export const getTechnicianBookings = async (req, res) => {
 export const updateBookingStatus = async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, finalAmount } = req.body;
+    const { status, finalAmount, note } = req.body;
     const queryId = ObjectId.isValid(id) ? new ObjectId(id) : id;
 
     // 1. Verify booking exists and belongs to this technician
@@ -154,7 +192,8 @@ export const updateBookingStatus = async (req, res) => {
       return res.status(400).json({ message: `Invalid status transition from '${booking.status}' to '${status}'` });
     }
 
-    const updateFields = { status, updatedAt: new Date() };
+    const changeTime = new Date();
+    const updateFields = { status, updatedAt: changeTime };
 
     // 3. Technician must provide finalAmount > 0 and <= 999999.99 when completing
     if (status === "completed") {
@@ -170,20 +209,42 @@ export const updateBookingStatus = async (req, res) => {
         });
       }
       updateFields.finalAmount = rounded;
-      updateFields.completedAt = new Date();
+      updateFields.completedAt = changeTime;
     }
 
-    // 4. Atomic update to prevent concurrent modification race
+    // Default status change note if custom note was not provided
+    const defaultNotes = {
+      accepted: "Booking request accepted by technician",
+      rejected: "Booking request declined by technician",
+      "in-progress": "Technician started repair work",
+      completed: `Repair completed successfully.${updateFields.finalAmount ? ` Final invoice: $${updateFields.finalAmount}` : ""}`,
+    };
+
+    const historyNote =
+      typeof note === "string" && note.trim() !== ""
+        ? note.trim()
+        : defaultNotes[status] || `Status updated to ${status}`;
+
+    const historyEntry = {
+      status,
+      changedAt: changeTime,
+      note: historyNote,
+    };
+
+    // 4. Atomic update to prevent concurrent modification race, appending to statusHistory
     const result = await bookings.updateOne(
       { _id: queryId, status: booking.status },
-      { $set: updateFields }
+      {
+        $set: updateFields,
+        $push: { statusHistory: historyEntry },
+      }
     );
 
     if (result.matchedCount === 0) {
       return res.status(409).json({ message: "Conflict: Booking was modified by another request. Please refresh and try again." });
     }
 
-    res.json({ success: true, message: `Booking status updated to ${status}` });
+    res.json({ success: true, message: `Booking status updated to ${status}`, statusHistory: historyEntry });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -207,7 +268,7 @@ export const getBookingById = async (req, res) => {
       return res.status(403).json({ message: "You do not have permission to view this booking" });
     }
 
-    res.json(booking);
+    res.json(ensureStatusHistory(booking));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
