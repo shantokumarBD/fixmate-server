@@ -156,14 +156,20 @@ export const updateBookingStatus = async (req, res) => {
 
     const updateFields = { status, updatedAt: new Date() };
 
-    // 3. Technician must provide finalAmount > 0 when completing
+    // 3. Technician must provide finalAmount > 0 and <= 999999.99 when completing
     if (status === "completed") {
-      if (!finalAmount || Number(finalAmount) <= 0) {
+      const parsed =
+        typeof finalAmount === "number" ||
+        (typeof finalAmount === "string" && finalAmount.trim() !== "")
+          ? Number(finalAmount)
+          : NaN;
+      const rounded = Math.round(parsed * 100) / 100;
+      if (!Number.isFinite(parsed) || rounded <= 0 || rounded > 999999.99) {
         return res.status(400).json({
-          message: "Technicians cannot mark a booking completed without entering a finalAmount > 0",
+          message: "Final amount must be a valid number between 0.01 and 999999.99",
         });
       }
-      updateFields.finalAmount = Number(finalAmount);
+      updateFields.finalAmount = rounded;
       updateFields.completedAt = new Date();
     }
 
